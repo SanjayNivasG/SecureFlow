@@ -275,6 +275,24 @@ describe("POST /api/findings", () => {
     expect(enqueueScanMock.mock.calls[0][0].customPlaceholders).toEqual([]);
   });
 
+  it("ignores caller-supplied fileChanges so the engine always fetches from GitHub (#3)", async () => {
+    // If fileChanges were forwarded, an authenticated caller could supply a
+    // clean fake diff and obtain a PASS verdict for a PR that actually
+    // contains a vulnerability — or supply a malicious fake diff to trigger
+    // a false BLOCK on an innocent PR.
+    await POST(
+      postRequest({
+        ...VALID_BODY,
+        fileChanges: [{ filename: "injected.ts", patch: "+// totally safe" }],
+      }),
+    );
+
+    expect(enqueueScanMock).toHaveBeenCalledTimes(1);
+    // The queue payload must carry an empty array so processScanJob is forced
+    // to fetch the authoritative diff from the GitHub API.
+    expect(enqueueScanMock.mock.calls[0][0].fileChanges).toEqual([]);
+  });
+
   it("rejects a malformed body with 400", async () => {
     const res = await POST(postRequest({ repositoryId: "repo-1" }));
 

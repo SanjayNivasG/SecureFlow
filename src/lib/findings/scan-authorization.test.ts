@@ -31,13 +31,27 @@ const validBody = {
 };
 
 describe("scanRequestSchema", () => {
-  it("accepts a minimal valid body and defaults the collections", () => {
+  it("accepts a minimal valid body", () => {
     const parsed = scanRequestSchema.safeParse(validBody);
 
     expect(parsed.success).toBe(true);
     if (!parsed.success) return;
 
-    expect(parsed.data.fileChanges).toEqual([]);
+    expect(parsed.data).not.toHaveProperty("fileChanges");
+    expect(parsed.data).not.toHaveProperty("activePolicies");
+  });
+
+  it("drops fileChanges so a caller cannot replace the PR diff with arbitrary content (#3)", () => {
+    const parsed = scanRequestSchema.safeParse({
+      ...validBody,
+      fileChanges: [{ filename: "evil.ts", patch: "+// totally safe" }],
+    });
+
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    // fileChanges must be absent from the parsed result — not just empty —
+    // so it cannot be serialized into the queue payload.
+    expect(parsed.data).not.toHaveProperty("fileChanges");
   });
 
   it("drops customIgnores, so a caller cannot suppress scanning files", () => {
@@ -220,17 +234,16 @@ describe("buildScanJobData", () => {
   });
 
   it("carries the scan parameters through and defaults ignores, placeholders, and policies to empty", () => {
-    const parsed = scanRequestSchema.parse({
-      ...validBody,
-      fileChanges: [{ filename: "a.ts", patch: "@@" }],
-    });
+    const parsed = scanRequestSchema.parse(validBody);
 
     const data = buildScanJobData({ body: parsed, repository, userId: "user-1" });
 
     expect(data.prNumber).toBe(7);
     expect(data.headSha).toBe("a".repeat(40));
     expect(data.installationId).toBe(12345678);
-    expect(data.fileChanges).toEqual([{ filename: "a.ts", patch: "@@" }]);
+    // fileChanges is always empty for API-initiated scans: the engine fetches
+    // the authoritative diff from GitHub (#3).
+    expect(data.fileChanges).toEqual([]);
     expect(data.customIgnores).toEqual([]);
     expect(data.customPlaceholders).toEqual([]);
     expect(data.activePolicies).toEqual([]);
@@ -256,6 +269,17 @@ describe("buildScanJobData", () => {
     expect(data.activePolicies).toEqual(serverPolicies);
     expect(data.customIgnores).toEqual(serverIgnores);
     expect(data.customPlaceholders).toEqual(serverPlaceholders);
+  });
+
+  it("always emits empty fileChanges regardless of what the request carried (#3)", () => {
+    const parsed = scanRequestSchema.parse({
+      ...validBody,
+      fileChanges: [{ filename: "injected.ts", patch: "+evil" }],
+    } as never);
+
+    const data = buildScanJobData({ body: parsed, repository, userId: "user-1" });
+
+    expect(data.fileChanges).toEqual([]);
   });
 
   it("does not accept client-supplied customIgnores, customPlaceholders, or activePolicies in body", () => {

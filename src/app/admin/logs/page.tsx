@@ -49,10 +49,7 @@ export default async function AdminLogsPage({
         <MetricsCard title="Top Action" value={topAction ? `${topAction.action}` : "—"} />
       </div>
 
-      <LogsTable
-        logs={result.logs}
-        actions={filters.actions}
-      />
+      <LogsTable logs={result.logs} actions={filters.actions} />
 
       {result.total > INITIAL_PAGE_SIZE && (
         <p className="text-xs text-muted-foreground text-center">

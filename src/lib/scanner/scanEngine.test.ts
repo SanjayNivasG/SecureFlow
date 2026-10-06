@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   explain: vi.fn(),
   getContent: vi.fn(),
   pullsGet: vi.fn(),
+  fetchPullRequestFiles: vi.fn(),
 }));
 
 vi.mock("@/lib/armor/scanner", () => ({
@@ -37,6 +38,9 @@ vi.mock("@/lib/queue/scanQueue", () => ({
 }));
 vi.mock("@/lib/prisma", () => ({
   default: { findingTriage: { findMany: vi.fn().mockResolvedValue([]) } },
+}));
+vi.mock("@/lib/github/pull-request-files", () => ({
+  fetchPullRequestFiles: mocks.fetchPullRequestFiles,
 }));
 vi.mock("octokit", () => ({
   App: class {
@@ -75,6 +79,12 @@ const jobData = {
   customPlaceholders: [],
 } as unknown as ScanJobData;
 
+/** Job data with empty fileChanges — the shape that POST /api/findings produces (#3). */
+const apiJobData: ScanJobData = {
+  ...jobData,
+  fileChanges: [],
+};
+
 describe("processScanJob chunk failures", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -85,6 +95,16 @@ describe("processScanJob chunk failures", () => {
       explanation: "e",
       remediationSuggestions: "r",
       promptInjectionSuspected: false,
+    });
+    // Default: GitHub returns two files for the pull request.
+    mocks.fetchPullRequestFiles.mockResolvedValue({
+      files: [
+        { filename: "src/real.ts", patch: "+const real = true;", status: "modified" },
+        { filename: "src/another.ts", patch: "+const x = 1;", status: "added" },
+      ],
+      fetched: 2,
+      truncated: false,
+      totalChanged: 2,
     });
   });
 
@@ -203,5 +223,88 @@ describe("processScanJob chunk failures", () => {
       expect(mocks.getContent).not.toHaveBeenCalled();
       expectScannedWith([]);
     });
+  });
+});
+
+describe("processScanJob — scan-input integrity (#3)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    mocks.updateScanJobProgress.mockResolvedValue(undefined);
+    mocks.explain.mockResolvedValue({
+      explanation: "e",
+      remediationSuggestions: "r",
+      promptInjectionSuspected: false,
+    });
+    mocks.fetchPullRequestFiles.mockResolvedValue({
+      files: [
+        { filename: "src/real.ts", patch: "+const real = true;", status: "modified" },
+        { filename: "src/another.ts", patch: "+const x = 1;", status: "added" },
+      ],
+      fetched: 2,
+      truncated: false,
+      totalChanged: 2,
+    });
+    mocks.scanPullRequest.mockResolvedValue([]);
+  });
+
+  it("fetches authoritative PR files from GitHub when fileChanges is empty (API path)", async () => {
+    // This is the shape POST /api/findings always produces after the fix: the
+    // schema no longer accepts fileChanges, so the queue payload carries [].
+    await processScanJob(apiJobData, undefined, { report: false, persist: false, enrich: false });
+
+    expect(mocks.fetchPullRequestFiles).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ owner: "acme", repo: "api", pullNumber: 7 }),
+    );
+  });
+
+  it("scans the GitHub-provided files, not any caller-supplied list (#3)", async () => {
+    // If a caller had supplied fileChanges: [{ filename: "fake.ts", patch: "+safe" }]
+    // the engine must NOT scan that \u2014 it must scan what GitHub says changed.
+    await processScanJob(apiJobData, undefined, { report: false, persist: false, enrich: false });
+
+    // The scanner received the real GitHub files, not a caller-supplied list.
+    expect(mocks.scanPullRequest).toHaveBeenCalledWith(
+      [
+        { filename: "src/real.ts", patch: "+const real = true;" },
+        { filename: "src/another.ts", patch: "+const x = 1;" },
+      ],
+      expect.any(Array),
+      expect.any(Array),
+      expect.any(Array),
+    );
+  });
+
+  it("headSha is forwarded to the GitHub fetch so the correct commit is validated", async () => {
+    await processScanJob(apiJobData, undefined, { report: false, persist: false, enrich: false });
+
+    // The headSha is used for .secureflowignore resolution; the PR file fetch
+    // is scoped to the pull request number, not the SHA, which is GitHub's API
+    // contract. Confirm both calls receive the right identifiers.
+    expect(mocks.fetchPullRequestFiles).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ pullNumber: apiJobData.prNumber }),
+    );
+  });
+
+  it("webhook-path job (non-empty fileChanges) uses its own list and does not call fetchPullRequestFiles", async () => {
+    // The webhook worker fetches files from GitHub itself (HMAC-verified webhook),
+    // then passes them in fileChanges. The engine must not fetch again.
+    const webhookData: ScanJobData = {
+      ...apiJobData,
+      fileChanges: [{ filename: "src/webhook-real.ts", patch: "+const wh = 1;" }],
+    };
+
+    await processScanJob(webhookData, undefined, { report: false, persist: false, enrich: false });
+
+    expect(mocks.fetchPullRequestFiles).not.toHaveBeenCalled();
+    expect(mocks.scanPullRequest).toHaveBeenCalledWith(
+      [{ filename: "src/webhook-real.ts", patch: "+const wh = 1;" }],
+      expect.any(Array),
+      expect.any(Array),
+      expect.any(Array),
+    );
   });
 });

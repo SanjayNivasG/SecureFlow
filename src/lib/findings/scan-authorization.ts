@@ -126,9 +126,15 @@ export async function loadActivePoliciesForUser(
  *  - `customIgnores` and `customPlaceholders`, because ignore patterns and
  *    placeholders must be governed by repository configuration (.secureflowignore)
  *    rather than untrusted request parameters (#2).
+<<<<<<< Updated upstream
  *  - `activePolicies`, because policy rules are derived server-side from
  *    database templates and user toggles, so a client cannot disable or alter
  *    security policies by sending an empty or modified array (#1).
+ *  - `fileChanges`, because accepting caller-supplied file diffs allows a
+ *    caller to replace the actual pull request contents with arbitrary fake
+ *    content, causing the scanner to assess code the PR never contained (#3).
+ *    The scan engine always fetches the authoritative diff from the GitHub API
+ *    using the authenticated installation token.
  *
  * `installationId` is still accepted — `Repository` carries no installation id
  * to derive it from — but it can no longer be used to reach another account's
@@ -141,14 +147,6 @@ export const scanRequestSchema = z.object({
   installationId: z.union([z.number(), z.string()]),
   prNumber: z.number().int().positive(),
   headSha: z.string().min(1),
-  fileChanges: z
-    .array(
-      z.object({
-        filename: z.string(),
-        patch: z.string(),
-      }),
-    )
-    .default([]),
 });
 
 export type ScanRequestBody = z.infer<typeof scanRequestSchema>;
@@ -158,8 +156,14 @@ export type ScanRequestBody = z.infer<typeof scanRequestSchema>;
  *
  * `repositoryId`, `repositoryFullName`, `userId`, and `activePolicies` are taken from
  * server-side authorization and database state, never from `body`.
- * Ignore patterns and placeholders are initialized empty and loaded from repository
- * configuration (.secureflowignore) by the scan engine.
+ *
+ * `fileChanges` is always initialised to an empty array. The scan engine
+ * detects an empty array and fetches the authoritative diff from the GitHub
+ * API for the authenticated installation, so no caller-supplied content can
+ * reach the scanner via this path (#3).
+ *
+ * Ignore patterns and placeholders are initialized empty and loaded from
+ * repository configuration (.secureflowignore) by the scan engine (#2).
  */
 export function buildScanJobData(args: {
   body: ScanRequestBody;
@@ -186,7 +190,9 @@ export function buildScanJobData(args: {
     installationId: body.installationId,
     prNumber: body.prNumber,
     headSha: body.headSha,
-    fileChanges: body.fileChanges,
+    // Never populated from the request body: the engine always fetches the
+    // authoritative diff from GitHub when this array is empty (#3).
+    fileChanges: [],
     activePolicies,
     customIgnores,
     customPlaceholders,

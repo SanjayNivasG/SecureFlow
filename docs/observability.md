@@ -29,13 +29,13 @@ Operator's `serviceMonitorSelector` looks for (commonly `release: kube-prometheu
 
 **Key defaults** (override in `values.yaml` or with `--set`):
 
-| Key | Default | Description |
-|-----|---------|-------------|
-| `serviceMonitor.enabled` | `false` | Deploy the ServiceMonitor CRD |
-| `serviceMonitor.path` | `/api/metrics/landing` | Scrape path |
-| `serviceMonitor.interval` | `30s` | Scrape interval |
-| `serviceMonitor.scrapeTimeout` | `10s` | Per-scrape timeout |
-| `serviceMonitor.namespace` | release namespace | Where to deploy the CRD |
+| Key                            | Default                | Description                   |
+| ------------------------------ | ---------------------- | ----------------------------- |
+| `serviceMonitor.enabled`       | `false`                | Deploy the ServiceMonitor CRD |
+| `serviceMonitor.path`          | `/api/metrics/landing` | Scrape path                   |
+| `serviceMonitor.interval`      | `30s`                  | Scrape interval               |
+| `serviceMonitor.scrapeTimeout` | `10s`                  | Per-scrape timeout            |
+| `serviceMonitor.namespace`     | release namespace      | Where to deploy the CRD       |
 
 **Verify scraping is working:**
 

@@ -215,7 +215,24 @@ export async function processScanJob(
     ...repositoryIgnoreConfig.placeholders,
   ];
 
-  // If no file changes provided, fetch from GitHub
+  // Fetch the authoritative PR file list from GitHub.
+  //
+  // Two callers reach this function:
+  //
+  //  1. The webhook worker (`src/lib/queue/worker.ts`). It already fetched the
+  //     real files from GitHub before calling `processScanJob`, passed them as
+  //     `fileChanges`, and set `report: false` and `persist: false` to suppress
+  //     the engine's own side-effects. The list it supplies is authoritative
+  //     because it came from an HMAC-verified webhook delivery.
+  //
+  //  2. `POST /api/findings` → BullMQ worker pool → this function. The route
+  //     previously accepted caller-supplied `fileChanges` and forwarded them
+  //     here unchanged, so a caller could replace the real diff with arbitrary
+  //     content and cause the scanner to assess code the PR never contained
+  //     (#3). The route now always passes an empty array for `fileChanges`
+  //     (enforced by removing the field from `scanRequestSchema`), so this
+  //     branch always executes for that path and fetches the authoritative diff
+  //     under the GitHub App's installation token.
   let fileChanges = initialFileChanges;
   if (fileChanges.length === 0) {
     const { owner, repo } = splitRepositoryFullName(repositoryFullName);
